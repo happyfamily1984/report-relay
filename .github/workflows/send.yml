@@ -1,0 +1,62 @@
+name: Send encrypted outbox
+
+# outbox/*.cms (공개키로 암호화된 보고서)가 푸시되면 비밀키로 풀어서 텔레그램으로 한 번 보냅니다.
+# 저장소에는 암호문만 있고, 푼 내용은 러너 안에서만 쓰고 버립니다.
+on:
+  push:
+    paths:
+      - "outbox/**.cms"
+  workflow_dispatch:
+    inputs:
+      files:
+        description: "다시 보낼 파일 경로 (공백 구분, 예: outbox/2026-10-29-foo.md.cms)"
+        required: true
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  send:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Decrypt and send
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_ALLOWED_CHAT_IDS: ${{ secrets.TELEGRAM_ALLOWED_CHAT_IDS }}
+          RELAY_KEY: ${{ secrets.RELAY_KEY }}
+          GH_TOKEN: ${{ github.token }}
+          BEFORE: ${{ github.event.before }}
+          INPUT_FILES: ${{ inputs.files }}
+        run: |
+          # 같은 푸시가 두 번 전달되면 가장 이른 실행만 발송합니다.
+          if [ "$GITHUB_EVENT_NAME" = "push" ]; then
+            first=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/send.yml/runs?head_sha=$GITHUB_SHA&event=push" \
+              --jq '[.workflow_runs[].id] | min')
+            if [ -n "$first" ] && [ "$first" != "$GITHUB_RUN_ID" ]; then
+              echo "duplicate run for $GITHUB_SHA (first run $first); skipping"; exit 0
+            fi
+          fi
+          if [ -n "$INPUT_FILES" ]; then
+            files="$INPUT_FILES"
+          elif git cat-file -e "$BEFORE^{commit}" 2>/dev/null; then
+            files=$(git diff --name-only --diff-filter=AM "$BEFORE" "$GITHUB_SHA" -- 'outbox/*.cms')
+          else
+            files=$(git diff --name-only --diff-filter=AM "$GITHUB_SHA~1" "$GITHUB_SHA" -- 'outbox/*.cms')
+          fi
+          if [ -z "$files" ]; then echo "nothing to send"; exit 0; fi
+          umask 077
+          work=$(mktemp -d)
+          printf '%s\n' "$RELAY_KEY" > "$work/key.pem"
+          plain=""
+          for f in $files; do
+            out="$work/$(basename "${f%.cms}")"
+            openssl cms -decrypt -binary -inform DER -in "$f" -inkey "$work/key.pem" -out "$out"
+            plain="$plain $out"
+          done
+          python3 -m reportbot.outbox $plain
+          rm -rf "$work"
