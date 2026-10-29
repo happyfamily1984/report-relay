@@ -19,7 +19,7 @@ class TelegramClient:
             raise ValueError("TELEGRAM_BOT_TOKEN is not set")
         self.token = token
 
-    def call(self, method: str, http_timeout: float = 60, **params):
+    def call(self, method: str, http_timeout: float = 20, **params):
         url = API_BASE.format(token=self.token, method=method)
         data = json.dumps({k: v for k, v in params.items() if v is not None}).encode()
         req = urllib.request.Request(
@@ -33,8 +33,13 @@ class TelegramClient:
             except urllib.error.HTTPError as e:
                 body = json.loads(e.read() or b"{}")
                 break
-            except (TimeoutError, urllib.error.URLError) as e:
-                # GitHub 러너에서 텔레그램 API 응답이 가끔 늦어 몇 번 다시 시도합니다.
+            except TimeoutError:
+                # 이 러너에서는 텔레그램이 요청을 처리(메시지 도착)하고도 응답을 돌려주지 않는 일이 있습니다.
+                # 다시 보내면 같은 메시지가 중복되므로, 응답이 없으면 전달된 것으로 보고 다음으로 넘어갑니다.
+                print(f"{method}: no response within {http_timeout}s, assuming delivered", flush=True)
+                return None
+            except urllib.error.URLError as e:
+                # 연결 자체가 실패한 경우(요청이 전달되지 않음)에만 다시 시도합니다.
                 if attempt == 2:
                     raise
                 print(f"{method}: {e!r}, retrying", flush=True)
