@@ -53,6 +53,9 @@ jobs:
           curl -sS -m 20 -o /dev/null -w "telegram ping: %{http_code} %{time_total}s\n" https://api.telegram.org/ || true
           python3 -c "import os,re;t=os.environ['TELEGRAM_BOT_TOKEN'];c=os.environ['TELEGRAM_ALLOWED_CHAT_IDS'];print('token len',len(t),'format ok' if re.fullmatch(r'\d+:[A-Za-z0-9_-]{30,}',t) else 'format BAD (spaces/newlines?)');print('chat ids format', 'ok' if re.fullmatch(r'[-\d, ]+',c) else 'BAD')"
           curl -sS -m 20 -o /dev/null -w "getMe: %{http_code} %{time_total}s\n" "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getMe" || true
+          curl -sS -4 -m 20 -o /dev/null -w "getMe ipv4: %{http_code} %{time_total}s\n" "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getMe" || true
+          curl -sS -m 20 -o /dev/null -w "bogus token: %{http_code} %{time_total}s\n" "https://api.telegram.org/bot123:abc/getMe" || true
+          getent ahosts api.telegram.org | head -4 || true
           umask 077
           work=$(mktemp -d)
           # 시크릿을 붙여 넣을 때 줄바꿈이 사라지거나 공백이 섞여도 되도록 PEM 형식을 다시 맞춥니다.
