@@ -51,7 +51,17 @@ jobs:
           if [ -z "$files" ]; then echo "nothing to send"; exit 0; fi
           umask 077
           work=$(mktemp -d)
-          printf '%s\n' "$RELAY_KEY" > "$work/key.pem"
+          # 시크릿을 붙여 넣을 때 줄바꿈이 사라지거나 공백이 섞여도 되도록 PEM 형식을 다시 맞춥니다.
+          python3 - "$work/key.pem" <<'PY'
+          import os, re, sys, textwrap
+          raw = os.environ["RELAY_KEY"]
+          body = re.sub(r"-----(BEGIN|END)[A-Z ]*-----", "", raw)
+          body = re.sub(r"[^A-Za-z0-9+/=]", "", body)
+          kind = "RSA PRIVATE KEY" if "RSA PRIVATE" in raw else "PRIVATE KEY"
+          print(f"key: {len(body)} base64 chars, header={'yes' if 'BEGIN' in raw else 'no'}")
+          with open(sys.argv[1], "w") as f:
+              f.write(f"-----BEGIN {kind}-----\n" + "\n".join(textwrap.wrap(body, 64)) + f"\n-----END {kind}-----\n")
+          PY
           plain=""
           for f in $files; do
             out="$work/$(basename "${f%.cms}")"
