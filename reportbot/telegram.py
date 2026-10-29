@@ -1,6 +1,7 @@
 """Minimal Telegram Bot API client using only the standard library."""
 
 import json
+import time
 import urllib.error
 import urllib.request
 
@@ -18,17 +19,26 @@ class TelegramClient:
             raise ValueError("TELEGRAM_BOT_TOKEN is not set")
         self.token = token
 
-    def call(self, method: str, http_timeout: float = 30, **params):
+    def call(self, method: str, http_timeout: float = 60, **params):
         url = API_BASE.format(token=self.token, method=method)
         data = json.dumps({k: v for k, v in params.items() if v is not None}).encode()
         req = urllib.request.Request(
             url, data=data, headers={"Content-Type": "application/json"}
         )
-        try:
-            with urllib.request.urlopen(req, timeout=http_timeout) as resp:
-                body = json.load(resp)
-        except urllib.error.HTTPError as e:
-            body = json.loads(e.read() or b"{}")
+        for attempt in range(3):
+            try:
+                with urllib.request.urlopen(req, timeout=http_timeout) as resp:
+                    body = json.load(resp)
+                break
+            except urllib.error.HTTPError as e:
+                body = json.loads(e.read() or b"{}")
+                break
+            except (TimeoutError, urllib.error.URLError) as e:
+                # GitHub 러너에서 텔레그램 API 응답이 가끔 늦어 몇 번 다시 시도합니다.
+                if attempt == 2:
+                    raise
+                print(f"{method}: {e!r}, retrying", flush=True)
+                time.sleep(5 * (attempt + 1))
         if not body.get("ok"):
             raise TelegramError(f"{method} failed: {body.get('description', body)}")
         return body["result"]
