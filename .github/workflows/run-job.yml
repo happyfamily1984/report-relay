@@ -1,0 +1,67 @@
+name: Run job
+
+# jobs/queue/*.txt 가 푸시되면, 비공개 reports 저장소의 수집 스크립트를 이 러너에서 실행하고
+# 결과(jobs/out/)를 reports 저장소에 바로 커밋합니다. 이 공개 저장소에는 결과가 남지 않습니다.
+# queue 파일 형식:  branch=<reports 브랜치>  /  script=jobs/<이름>.py   (한 줄에 하나)
+on:
+  push:
+    paths:
+      - "jobs/queue/*.txt"
+  workflow_dispatch:
+    inputs:
+      queue:
+        description: "실행할 queue 파일 (예: jobs/queue/2026-10-30-test.txt)"
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: run-job
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Run queued jobs against private reports repo
+        env:
+          REPORTS_TOKEN: ${{ secrets.REPORTS_TOKEN }}
+          BEFORE: ${{ github.event.before }}
+          INPUT_QUEUE: ${{ inputs.queue }}
+        run: |
+          if [ -n "$INPUT_QUEUE" ]; then
+            queue="$INPUT_QUEUE"
+          elif git cat-file -e "$BEFORE^{commit}" 2>/dev/null; then
+            queue=$(git diff --name-only --diff-filter=AM "$BEFORE" "$GITHUB_SHA" -- 'jobs/queue/*.txt')
+          else
+            queue=$(git diff --name-only --diff-filter=AM "$GITHUB_SHA~1" "$GITHUB_SHA" -- 'jobs/queue/*.txt')
+          fi
+          if [ -z "$queue" ]; then echo "nothing queued"; exit 0; fi
+          if [ -z "$REPORTS_TOKEN" ]; then echo "REPORTS_TOKEN secret is missing"; exit 1; fi
+          for q in $queue; do
+            branch=$(sed -n 's/^branch=//p' "$q" | head -1)
+            scripts=$(sed -n 's/^script=//p' "$q")
+            echo "== $q -> branch $branch"
+            rm -rf /tmp/reports
+            git clone -q --depth 20 -b "$branch" \
+              "https://x-access-token:${REPORTS_TOKEN}@github.com/happyfamily1984/reports.git" /tmp/reports
+            ( cd /tmp/reports
+              for s in $scripts; do
+                case "$s" in jobs/*.py) ;; *) echo "skip $s (only jobs/*.py)"; continue;; esac
+                echo "== run $s"; timeout 900 python3 "$s" || echo "job $s failed"
+              done
+              git config user.name "github-actions[bot]"
+              git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+              git add jobs/out 2>/dev/null || true
+              if git diff --cached --quiet; then echo "no results to commit"; exit 0; fi
+              git commit -qm "Job results"
+              for i in 1 2 3; do
+                git push -q origin "HEAD:$branch" && break
+                git pull -q --rebase origin "$branch"
+              done )
+          done
