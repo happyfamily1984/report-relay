@@ -1,0 +1,2 @@
+branch=ccr-ace2f4de-8wvxja
+script=jobs/odd_rulings_kr.py
